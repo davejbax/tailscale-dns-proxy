@@ -1,5 +1,8 @@
 # Tailscale DNS Proxy
 
+[![CI status](https://github.com/davejbax/tailscale-dns-proxy/actions/workflows/ci.yml/badge.svg)](https://github.com/davejbax/tailscale-dns-proxy/actions?query=workflow:ci)
+[![Go Report Card](https://goreportcard.com/badge/github.com/davejbax/tailscale-dns-proxy)](https://goreportcard.com/report/github.com/davejbax/tailscale-dns-proxy)
+
 *Note: This project has no affiliation with [Tailscale](https://www.tailscale.com/)*
 
 DNS server that rewrites responses containing private IPs corresponding to your Tailscale machines to their Tailnet IP addresses.
