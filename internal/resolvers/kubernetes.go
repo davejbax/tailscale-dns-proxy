@@ -19,7 +19,7 @@ import (
 
 const (
 	indexByServicePath = "IndexByServicePath"
-	indexByExternalIp  = "IndexByExternalIp"
+	indexByExternalIP  = "IndexByExternalIp"
 
 	labelTailscaleParentResource     = "tailscale.com/parent-resource"
 	labelTailscaleParentResourceNs   = "tailscale.com/parent-resource-ns"
@@ -82,14 +82,14 @@ func NewKubernetesResolverWithDefaultClient(config *KubernetesConfig) (*Kubernet
 		return nil, fmt.Errorf("failed to create Kubernetes client: %w", err)
 	}
 
-	return NewKubernetesResolverFromConfig(kube, config), nil
+	return NewKubernetesResolverFromConfig(kube, config)
 }
 
-func NewKubernetesResolverFromConfig(client kubernetes.Interface, config *KubernetesConfig) *KubernetesResolver {
+func NewKubernetesResolverFromConfig(client kubernetes.Interface, config *KubernetesConfig) (*KubernetesResolver, error) {
 	return NewKubernetesResolver(client, time.Duration(config.InformerResyncPeriodSeconds)*time.Second, config.TailscaleOperatorNamespace)
 }
 
-func NewKubernetesResolver(client kubernetes.Interface, resync time.Duration, tailscaleOperatorNamespace string) *KubernetesResolver {
+func NewKubernetesResolver(client kubernetes.Interface, resync time.Duration, tailscaleOperatorNamespace string) (*KubernetesResolver, error) {
 	registry := &KubernetesResolver{}
 
 	registry.secretFactory = informers.NewSharedInformerFactoryWithOptions(client, resync,
@@ -97,7 +97,7 @@ func NewKubernetesResolver(client kubernetes.Interface, resync time.Duration, ta
 	)
 	registry.secretInformer = registry.secretFactory.Core().V1().Secrets().Informer()
 
-	registry.secretInformer.AddIndexers(map[string]cache.IndexFunc{
+	err := registry.secretInformer.AddIndexers(map[string]cache.IndexFunc{
 		indexByServicePath: func(obj interface{}) ([]string, error) {
 			secret := obj.(*corev1.Secret)
 
@@ -119,12 +119,15 @@ func NewKubernetesResolver(client kubernetes.Interface, resync time.Duration, ta
 			return []string{makeServicePath(parentResourceNs, parentResource)}, nil
 		},
 	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to add secret informer indexers: %w", err)
+	}
 
 	registry.serviceFactory = informers.NewSharedInformerFactory(client, resync)
 	registry.serviceInformer = registry.serviceFactory.Core().V1().Services().Informer()
 
-	registry.serviceInformer.AddIndexers(map[string]cache.IndexFunc{
-		indexByExternalIp: func(obj interface{}) ([]string, error) {
+	err = registry.serviceInformer.AddIndexers(map[string]cache.IndexFunc{
+		indexByExternalIP: func(obj interface{}) ([]string, error) {
 			service := obj.(*corev1.Service)
 
 			var ips []string
@@ -137,8 +140,11 @@ func NewKubernetesResolver(client kubernetes.Interface, resync time.Duration, ta
 			return ips, nil
 		},
 	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to add service informer indexers: %w", err)
+	}
 
-	return registry
+	return registry, nil
 }
 
 func startAndWaitForCacheSync(factory informers.SharedInformerFactory, cancel <-chan struct{}) error {
@@ -169,7 +175,7 @@ func (r *KubernetesResolver) GetTailscaleIPsByService(serviceNamespace string, s
 
 	for _, secretI := range secrets {
 		secret := secretI.(*corev1.Secret)
-		ipsJson, ok := secret.Data[tailscaleSecretDataDeviceIps]
+		ipsJSON, ok := secret.Data[tailscaleSecretDataDeviceIps]
 		if !ok {
 			// This secret doesn't have the device_ips key. This could be because it's
 			// not the secret we're looking for (unlikely), or because the corresponding
@@ -178,7 +184,7 @@ func (r *KubernetesResolver) GetTailscaleIPsByService(serviceNamespace string, s
 		}
 
 		var ips []string
-		if err := json.Unmarshal(ipsJson, &ips); err != nil {
+		if err := json.Unmarshal(ipsJSON, &ips); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal tailscale-operator secret device IPs data: %w", err)
 		}
 
@@ -194,7 +200,7 @@ func (r *KubernetesResolver) GetTailscaleIPsByService(serviceNamespace string, s
 }
 
 func (r *KubernetesResolver) GetTailscaleIPsByExternalIP(externalIP net.IP) ([]net.IP, error) {
-	services, err := r.serviceInformer.GetIndexer().ByIndex(indexByExternalIp, externalIP.String())
+	services, err := r.serviceInformer.GetIndexer().ByIndex(indexByExternalIP, externalIP.String())
 	if err != nil {
 		return nil, fmt.Errorf("failed to query service informer index: %w", err)
 	}

@@ -19,21 +19,21 @@ const (
 	envPrefix = "TSDNSPROXY"
 )
 
-type AppConfig struct {
+type appConfig struct {
 	Proxy     proxy.Config `mapstructure:"proxy"`
 	IPStealer struct {
 		Enabled          bool `mapstructure:"enabled"`
 		ipstealer.Config `mapstructure:",squash" validate:"required_if=Enabled true"`
 	}
-	Resolver ResolverConfig `mapstructure:"resolver"`
+	Resolver resolverConfig `mapstructure:"resolver"`
 }
 
-type ResolverConfig struct {
+type resolverConfig struct {
 	StartTimeoutSeconds int                         `mapstructure:"start_timeout_seconds"`
 	Kubernetes          *resolvers.KubernetesConfig `mapstructure:"kubernetes"`
 }
 
-func (r *ResolverConfig) Create() (resolvers.Resolver, error) {
+func (r *resolverConfig) Create() (resolvers.Resolver, error) {
 	switch {
 	case r.Kubernetes != nil:
 		return resolvers.NewKubernetesResolverWithDefaultClient(r.Kubernetes)
@@ -42,7 +42,7 @@ func (r *ResolverConfig) Create() (resolvers.Resolver, error) {
 	}
 }
 
-func loadConfig() (*AppConfig, error) {
+func loadConfig() (*appConfig, error) {
 	viper.SetConfigName("config")
 	viper.SetConfigType("yaml")
 	viper.AddConfigPath("/etc/tsdnsproxy")
@@ -59,20 +59,21 @@ func loadConfig() (*AppConfig, error) {
 		envVariable := split[0]
 
 		// Trim prefix and only proceed if we successfully trimmed it (i.e. skip non-prefixed vars)
-		if envKey := strings.TrimPrefix(envVariable, envPrefix+"_"); envKey != envVariable {
-			viper.BindEnv(strings.ReplaceAll(envKey, "__", "."))
+		if envKey := strings.TrimPrefix(envVariable, envPrefix+"_"); envKey != envVariable && len(envKey) > 0 {
+			// Only cause of error here is if the argument is empty, which we know it isn't
+			_ = viper.BindEnv(strings.ReplaceAll(envKey, "__", "."))
 		}
 	}
 
 	if err := viper.ReadInConfig(); err != nil {
-		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
+		if errors.As(err, &viper.ConfigFileNotFoundError{}) {
 			return nil, fmt.Errorf("failed to read config: %w", err)
 		}
 		// We don't care about the config not being found, because it's theoretically
 		// possible to configure entirely with env vars.
 	}
 
-	var config AppConfig
+	var config appConfig
 	err := viper.Unmarshal(&config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal config: %w", err)

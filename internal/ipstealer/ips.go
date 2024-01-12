@@ -8,7 +8,7 @@ import (
 func randomTailscaleIPv4(occupiedIPs []string) string {
 regenerate:
 	for {
-		randomIP := fmt.Sprintf("100.64.%d.%d", rand.Intn(256), rand.Intn(256))
+		randomIP := fmt.Sprintf("100.64.%d.%d", rand.Intn(256), rand.Intn(256)) //nolint:gosec
 		for _, ip := range occupiedIPs {
 			if ip == randomIP {
 				continue regenerate

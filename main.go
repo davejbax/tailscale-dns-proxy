@@ -44,7 +44,7 @@ func mainE() error {
 		return fmt.Errorf("failed to parse flags and/or create logger: %w", err)
 	}
 
-	defer logger.Sync()
+	defer logger.Sync() //nolint:errcheck
 
 	cfg, err := loadConfig()
 	if err != nil {
@@ -74,11 +74,11 @@ func mainE() error {
 	if cfg.IPStealer.Enabled {
 		logger.Info("starting IP stealer")
 		stealer := ipstealer.New(ctx, logger, &cfg.IPStealer.Config)
-		ticker := stealer.Start()
+		ticker := stealer.Start(ctx)
 		defer ticker.Stop()
 	}
 
-	proxy := proxy.NewProxyServer(ctx, logger, resolver, &cfg.Proxy)
+	proxy := proxy.New(logger, resolver, &cfg.Proxy)
 	logger.Info("starting proxy server")
-	return proxy.ListenAndServe()
+	return proxy.ListenAndServeContext(ctx)
 }

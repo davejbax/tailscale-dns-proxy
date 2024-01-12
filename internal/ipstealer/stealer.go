@@ -24,7 +24,6 @@ var (
 )
 
 type PeriodicThief struct {
-	ctx    context.Context
 	logger *zap.Logger
 	config *Config
 	client *tailscale.Client
@@ -55,25 +54,24 @@ func New(ctx context.Context, logger *zap.Logger, config *Config) *PeriodicThief
 	client.HTTPClient = oauthClient
 
 	return &PeriodicThief{
-		ctx:    ctx,
 		logger: logger,
 		client: client,
 		config: config,
 	}
 }
 
-func (p *PeriodicThief) Start() *time.Ticker {
+func (p *PeriodicThief) Start(ctx context.Context) *time.Ticker {
 	ticker := time.NewTicker(time.Duration(p.config.PeriodSeconds) * time.Second)
 	go func() {
 		for {
 			select {
 			case <-ticker.C:
 				p.logger.Info("starting scheduled IP steal")
-				err := p.Steal()
+				err := p.Steal(ctx)
 				if err != nil {
 					p.logger.Error("failed to steal IP", zap.Error(err))
 				}
-			case <-p.ctx.Done():
+			case <-ctx.Done():
 				return
 			}
 		}
@@ -82,8 +80,8 @@ func (p *PeriodicThief) Start() *time.Ticker {
 	return ticker
 }
 
-func (p *PeriodicThief) Steal() error {
-	devices, err := p.client.Devices(p.ctx, tailscale.DeviceDefaultFields)
+func (p *PeriodicThief) Steal(ctx context.Context) error {
+	devices, err := p.client.Devices(ctx, tailscale.DeviceDefaultFields)
 	if err != nil {
 		return fmt.Errorf("failed to fetch list of devices: %w", err)
 	}
@@ -133,7 +131,7 @@ func (p *PeriodicThief) Steal() error {
 			zap.String("name", currentDevice.Name),
 		)
 
-		err := p.setDeviceIPv4(currentDevice, randomTailscaleIPv4(occupiedIPs))
+		err := p.setDeviceIPv4(ctx, currentDevice, randomTailscaleIPv4(occupiedIPs))
 		if err != nil {
 			return fmt.Errorf("failed to change currently occupying device's IP: %w", err)
 		}
@@ -143,11 +141,11 @@ func (p *PeriodicThief) Steal() error {
 		zap.String("deviceID", targetDevice.DeviceID),
 		zap.String("name", targetDevice.Name),
 	)
-	return p.setDeviceIPv4(targetDevice, p.config.DesiredIP)
+	return p.setDeviceIPv4(ctx, targetDevice, p.config.DesiredIP)
 }
 
-func (p *PeriodicThief) setDeviceIPv4(device *tailscale.Device, ip string) error {
-	req, err := makeSetDeviceIPv4Request(p.ctx, device.DeviceID, p.config.DesiredIP)
+func (p *PeriodicThief) setDeviceIPv4(ctx context.Context, device *tailscale.Device, ip string) error {
+	req, err := makeSetDeviceIPv4Request(ctx, device.DeviceID, ip)
 	if err != nil {
 		return fmt.Errorf("failed to make set device IP request: %w", err)
 	}

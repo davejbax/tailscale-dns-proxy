@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"time"
 
 	"github.com/davejbax/tailscale-dns-proxy/internal/iplist"
 	"github.com/miekg/dns"
@@ -21,7 +22,7 @@ var (
 )
 
 type handler struct {
-	server *ProxyServer
+	server *Server
 	client *dns.Client
 }
 
@@ -33,8 +34,8 @@ func (h *handler) writeMsg(w dns.ResponseWriter, msg *dns.Msg) {
 	}
 }
 
-func (h *handler) intercept(w dns.ResponseWriter, req *dns.Msg) {
-	resp, err := h.resolveUpstream(req)
+func (h *handler) intercept(ctx context.Context, w dns.ResponseWriter, req *dns.Msg) {
+	resp, err := h.resolveUpstream(ctx, req)
 	if err != nil {
 		if !errors.Is(err, context.DeadlineExceeded) {
 			h.server.logger.Warn("upstream resolution failed: %w", zap.Error(err))
@@ -46,7 +47,7 @@ func (h *handler) intercept(w dns.ResponseWriter, req *dns.Msg) {
 		return
 	}
 
-	newResp, err := h.doInterception(req, resp)
+	newResp, err := h.doInterception(ctx, req, resp)
 	if err != nil {
 		h.server.logger.Debug("decided not to intercept",
 			zap.NamedError("reason", err),
@@ -60,16 +61,15 @@ func (h *handler) intercept(w dns.ResponseWriter, req *dns.Msg) {
 	h.writeMsg(w, newResp)
 }
 
-func (h *handler) doInterception(req *dns.Msg, resp *dns.Msg) (*dns.Msg, error) {
-
+func (h *handler) doInterception(ctx context.Context, req *dns.Msg, resp *dns.Msg) (*dns.Msg, error) {
 	// We can't deal with things that aren't A/AAAA queries and exactly one question.
 	// I don't think anyone sends things with multiple questions anyway!
 	if len(req.Question) != 1 || (req.Question[0].Qtype != dns.TypeA && req.Question[0].Qtype != dns.TypeAAAA) {
 		return nil, errNotInterceptableQuestion
 	}
 
-	g, ctx := errgroup.WithContext(h.server.ctx)
-	resolvedIps := make(chan []net.IP)
+	g, ctx := errgroup.WithContext(ctx)
+	resolvedIPs := make(chan []net.IP)
 
 	// XXX: This is almost certainly a premature parallelisation!!
 	for _, answer := range resp.Answer {
@@ -109,7 +109,7 @@ func (h *handler) doInterception(req *dns.Msg, resp *dns.Msg) (*dns.Msg, error) 
 			}
 
 			select {
-			case resolvedIps <- ips:
+			case resolvedIPs <- ips:
 			case <-ctx.Done():
 				return ctx.Err()
 			}
@@ -121,13 +121,14 @@ func (h *handler) doInterception(req *dns.Msg, resp *dns.Msg) (*dns.Msg, error) 
 	go func() {
 		// Close the channel after the errgroup is finished so that the read
 		// loop below doesn't hang!
-		g.Wait()
-		close(resolvedIps)
+		// We don't care about the error here: we check it outside of this goroutine
+		_ = g.Wait()
+		close(resolvedIPs)
 	}()
 
 	var tailscaleIPs []net.IP
-	for resolvedIpSet := range resolvedIps {
-		tailscaleIPs = append(tailscaleIPs, resolvedIpSet...)
+	for resolvedIPSet := range resolvedIPs {
+		tailscaleIPs = append(tailscaleIPs, resolvedIPSet...)
 	}
 
 	if err := g.Wait(); err != nil {
@@ -173,8 +174,8 @@ func (h *handler) doInterception(req *dns.Msg, resp *dns.Msg) (*dns.Msg, error) 
 	return msg, nil
 }
 
-func (h *handler) forward(w dns.ResponseWriter, req *dns.Msg) {
-	resp, err := h.resolveUpstream(req)
+func (h *handler) forward(ctx context.Context, w dns.ResponseWriter, req *dns.Msg) {
+	resp, err := h.resolveUpstream(ctx, req)
 	if err != nil {
 		if !errors.Is(err, context.DeadlineExceeded) {
 			h.server.logger.Warn("upstream resolution failed: %w", zap.Error(err))
@@ -187,21 +188,28 @@ func (h *handler) forward(w dns.ResponseWriter, req *dns.Msg) {
 	h.writeMsg(w, resp)
 }
 
-func (h *handler) resolveUpstream(req *dns.Msg) (*dns.Msg, error) {
-	ctx, cancel := context.WithTimeoutCause(h.server.ctx, h.server.totalUpstreamTimeout, errTotalUpstreamTimeoutExceeded)
+func (h *handler) resolveUpstream(ctx context.Context, req *dns.Msg) (*dns.Msg, error) {
+	ctx, cancel := context.WithTimeoutCause(
+		ctx,
+		time.Duration(h.server.config.UpstreamTotalTimeoutSeconds)*time.Second,
+		errTotalUpstreamTimeoutExceeded,
+	)
 	defer cancel()
 
-	for _, upstream := range h.server.upstreams {
+	for _, upstream := range h.server.config.Upstreams {
 		resp, _, err := h.client.ExchangeContext(ctx, req, upstream)
 		if err != nil {
+			// errTotalUpstreamTimeoutExceeded wraps a DeadlineExceeded, so we
+			// should check for this first.
 			if errors.Is(err, errTotalUpstreamTimeoutExceeded) {
 				return nil, err
 			} else if errors.Is(err, context.DeadlineExceeded) {
 				// This specific upstream didn't work, but we still have time: try the next upstream
 				continue
-			} else {
-				return nil, err
 			}
+
+			// We're not sure what the error is; bail out
+			return nil, err
 		}
 
 		// We got a response! Return it

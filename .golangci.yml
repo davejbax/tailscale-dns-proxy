@@ -1,0 +1,26 @@
+linters:
+  enable:
+    - errcheck
+    - gosimple
+    - govet
+    - ineffassign
+    - staticcheck
+    - typecheck
+    - unused
+    # Non-defaults follow
+    - containedctx
+    - contextcheck
+    - dupl
+    - durationcheck
+    - errorlint
+    - gochecknoglobals
+    - gocritic
+    - goimports
+    - gosec
+    - loggercheck
+    - revive
+    - stylecheck
+    - tenv
+    - testifylint
+    - testpackage
+    - tparallel
