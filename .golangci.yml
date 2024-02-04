@@ -24,3 +24,5 @@ linters:
     - testifylint
     - testpackage
     - tparallel
+run:
+  timeout: "5m" # Long timeout for cache initialisation in CI
